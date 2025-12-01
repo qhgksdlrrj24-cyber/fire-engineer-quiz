@@ -35,15 +35,49 @@ class QuizApp {
             const progress = JSON.parse(saved);
             this.completedQuestions = new Set(progress.completed || []);
             this.starredQuestions = new Set(progress.starred || []);
+            // Load saved indices for each mode/deck combination
+            this.savedIndices = progress.savedIndices || {};
+        } else {
+            this.savedIndices = {};
         }
     }
 
     saveProgress() {
         const progress = {
             completed: Array.from(this.completedQuestions),
-            starred: Array.from(this.starredQuestions)
+            starred: Array.from(this.starredQuestions),
+            savedIndices: this.savedIndices
         };
         localStorage.setItem('quizProgress', JSON.stringify(progress));
+
+        // Trigger storage event for other tabs (custom event for same tab)
+        window.dispatchEvent(new CustomEvent('quizProgressUpdated', { detail: progress }));
+    }
+
+    // Get unique key for current quiz session
+    getSessionKey() {
+        if (this.currentMode === 'all') {
+            return 'mode_all';
+        } else if (this.currentMode === 'starred') {
+            return 'mode_starred';
+        } else if (this.currentMode === 'deck') {
+            // Sort deck names to ensure consistent key
+            return 'deck_' + this.selectedDecks.sort().join('_');
+        }
+        return 'unknown';
+    }
+
+    // Save current index for the current session
+    saveCurrentIndex() {
+        const sessionKey = this.getSessionKey();
+        this.savedIndices[sessionKey] = this.currentIndex;
+        this.saveProgress();
+    }
+
+    // Load saved index for the current session
+    loadCurrentIndex() {
+        const sessionKey = this.getSessionKey();
+        return this.savedIndices[sessionKey] || 0;
     }
 
     setupEventListeners() {
@@ -87,6 +121,40 @@ class QuizApp {
         document.getElementById('backToSetupBtn').addEventListener('click', () => {
             this.backToSetup();
         });
+
+        // Listen for storage changes from other tabs/windows
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'quizProgress' && e.newValue) {
+                this.handleProgressUpdate(JSON.parse(e.newValue));
+            }
+        });
+
+        // Listen for custom event from same tab
+        window.addEventListener('quizProgressUpdated', (e) => {
+            // This handles updates within the same tab
+            this.updateStats();
+        });
+    }
+
+    handleProgressUpdate(progress) {
+        // Update local state with data from other tabs
+        this.completedQuestions = new Set(progress.completed || []);
+        this.starredQuestions = new Set(progress.starred || []);
+        this.savedIndices = progress.savedIndices || {};
+
+        // Update UI
+        this.updateStats();
+
+        // If currently in quiz mode, update the star button
+        if (!document.getElementById('quizScreen').classList.contains('hidden')) {
+            const question = this.currentQuestions[this.currentIndex];
+            const starBtn = document.getElementById('starBtn');
+            if (this.starredQuestions.has(question.id)) {
+                starBtn.classList.add('starred');
+            } else {
+                starBtn.classList.remove('starred');
+            }
+        }
     }
 
     updateDeckSelectionVisibility() {
@@ -159,7 +227,14 @@ class QuizApp {
             return;
         }
 
-        this.currentIndex = 0;
+        // Load saved index for this session, or start from 0
+        this.currentIndex = this.loadCurrentIndex();
+
+        // Ensure currentIndex is within bounds
+        if (this.currentIndex >= this.currentQuestions.length) {
+            this.currentIndex = 0;
+        }
+
         this.showQuizScreen();
         this.displayQuestion();
     }
@@ -208,7 +283,9 @@ class QuizApp {
 
         // Mark as viewed (completed)
         this.completedQuestions.add(question.id);
-        this.saveProgress();
+
+        // Save current index
+        this.saveCurrentIndex();
         this.updateStats();
     }
 
